@@ -1,23 +1,15 @@
-#Written by Daniel Yoon 2022-03-08
+#2023-03-08: Created by Daniel Yoon
+#2023-05-04 Update: Added a definition to identify the latest count per group_id within the same day of the current date. Then updated the logic to continue from that count
 
 import os
 import pandas as pd
 from datetime import date
-#import datetime
 import pyodbc
 import glob
 
-
 #variable instantiation
-
 current_date = str(date.today())
 current_date = current_date.replace("-","")
-'''
-#pull in the current date and time. Pull the first 19 characters to pull up to the second. Replace extraneous characters
-current_date = str(datetime.datetime.now())
-current_date = current_date[:19]
-current_date = current_date.replace("-","").replace(":","").replace(" ","")
-'''
 
 #change directory to where the HCFA files are
 os.chdir("***")
@@ -29,6 +21,75 @@ filenames = pd.Series(filenames)
 filenames_split = filenames.str.split(pat="-")
 
 
+#3: identify the latest file count per group id within the same day of the current date
+def latest_count():
+            
+    try:
+    
+        print('Executing 3, latest_count()')
+        #connect to EZStage Database and execute the query
+        #variable instantiation
+        server = ***
+        database = ***
+        username = ***
+        password = ***
+        
+        #3a: Open pyodbc connection and execute query
+        step = '3a'
+        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER='+server+';DATABASE='+database+';UID='+username+';PWD='+ password)
+        cursor = conn.cursor()
+        cursor.fast_executemany = True
+    
+        #3b: build the SQL statement. 'insertion_values' has an extra comma at the end, hence the [:-1] splicing
+        step = '3b'
+        SQL =   '''
+                WITH CTE AS (
+                    SELECT *, (SELECT REPLACE(VALUE,'.pdf','') FROM EZStage.dbo.udf_string_split(new_filename,'_') WHERE rowid = 4) [counter]
+                    FROM EZStage.dbo.HCFAUBReprint_Audit 
+                    WHERE CONVERT(DATE,date_renamed) = CONVERT(DATE,GETDATE())
+                )
+                
+                SELECT 
+                    group_no
+                    ,CONVERT(DATE,date_renamed) date_renamed
+                    ,MAX([counter]) max_counter
+                FROM CTE
+                GROUP BY group_no, CONVERT(DATE,date_renamed)
+                ORDER BY group_no, date_renamed desc
+                '''
+        
+        #3c: execute the SQL
+        step = '3c'
+        max_counters = cursor.execute(SQL).fetchall()
+        
+        #3d: delimit the object from max_encounters()
+        step = '3d'
+        max_counters = [str(i).split(",") for i in max_counters]
+        
+        #3e: convert to dataframe
+        step = '3e'
+        max_counters = pd.DataFrame(max_counters)
+        
+        #3f: add column headers
+        step = '3f'
+        max_counters.columns = ["id","year","month","day","max_counter"]        
+        
+        #3g: remove extraneous characters
+        step = '3g'
+        max_counters = max_counters.applymap(lambda x: x.replace("'", "").replace(")","").replace("(","").replace("datetime.date","").strip())
+        
+        #close server connection
+        cursor.commit()
+        cursor.close()
+        conn.close()
+        
+        return max_counters
+        
+    except Exception as e:
+        print("Error on step {}: ".format(step) + str(e))              
+        
+        
+#2: insert values into audit table
 def data_insertion(insertion_values):
 
     try:
@@ -64,7 +125,7 @@ def data_insertion(insertion_values):
         print("Error on step {}: ".format(step) + str(e))        
     
 
-#rename the files and build out the insertion values for the SQL statement
+#1: rename the files and build out the insertion values for the SQL statement
 def renamefiles_and_buildquery():
 
     try:
@@ -76,7 +137,7 @@ def renamefiles_and_buildquery():
     
         #iterate through each file in 'filenames_split
         for i in range(len(filenames_split)):
-            #1a-1g: pull the parsed values from filenames_split
+            #1a-1d: pull the parsed values from filenames_split
             step = '1a'
             group_id = filenames_split[i][0]
             
@@ -92,39 +153,59 @@ def renamefiles_and_buildquery():
             #1e: reset the counter when the group_id changes
             step = '1e'
             if group_id != group_id_check:
-                counter = 1
+                
+                #1f: if a count has started already from a previous run in the same day, continue from that latest count. 
+                #check if the length of the dataframe is > 0 where the group_id matches
+                step = '1f'
+                if len(max_encounters.loc[max_encounters['id'] == group_id]) > 0:
+                    
+                    #1g-1i: pull the max_counter value from the matched row, replace extraneous characters, convert to integer and add 1 from the latest counter
+                    step = '1g'
+                    counter = max_encounters.loc[max_encounters['id'] == group_id, "max_counter"].values
+                    step = '1h'
+                    counter = str(counter).replace("[","").replace("'","").replace("]","")
+                    step = '1i'
+                    counter = int(counter) + 1
+                    
+                else:
+                    counter = 1
+                
                 group_id_check = group_id
             
-            #1f-1g: declare the old and new filenames
-            step = '1f'
+            #1j: declare the old filename
+            step = '1j'
             old_filename = filenames[i]
             
-            step = '1g'
+            #1k: declare the new filename
+            step = '1k'
             new_filename = "Redirect039_" + current_date + "_" + group_id + "_" + str(counter) + ".pdf"
             
-            #1h: increment the counter by 1, after it has been used in the new_filename declaration
-            step = '1h'
-            counter += 1
+            #1l: increment the counter by 1, after it has been used in the new_filename declaration
+            step = '1l'
+            counter = counter + 1
             
-            #1i: build the SQL statement for each file
-            step = '1i'
+            #1m: build the SQL statement for each file
+            step = '1m'
             insertion_values = insertion_values + "('" + group_id + "','" + company_id + "','" + claim_type + "','" + claimno + "','" + old_filename + "','" + new_filename + "', GETDATE()),"
 
-            #1j: rename each file iteratively
-            step = '1j'
+            #1n: rename each file iteratively
+            step = '1n'
             os.rename(old_filename, new_filename)
             
-            #1k: insert into the tracking table for every 25th file and at the last file. To prevent string truncation into SQL
-            step = '1k'
+            #1o: insert into the tracking table for every 25th file and at the last file. To prevent string truncation into SQL
+            step = '1o'
             if i % 25 == 0 or i == (len(filenames_split)-1):
                 print(str(i+1) + " record counter insertion")                
                 data_insertion(insertion_values)
                 insertion_values = ""
+            
         
     except Exception as e:
         print("Error on step {}: ".format(step) + str(e))
         
+        
+#identify the latest count per group_id that is in the same day of the current date.
+max_encounters = latest_count()
 
-   
 #execute the definition
 renamefiles_and_buildquery()

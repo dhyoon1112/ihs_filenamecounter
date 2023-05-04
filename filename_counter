@@ -1,0 +1,130 @@
+#Written by Daniel Yoon 2022-03-08
+
+import os
+import pandas as pd
+from datetime import date
+#import datetime
+import pyodbc
+import glob
+
+
+#variable instantiation
+
+current_date = str(date.today())
+current_date = current_date.replace("-","")
+'''
+#pull in the current date and time. Pull the first 19 characters to pull up to the second. Replace extraneous characters
+current_date = str(datetime.datetime.now())
+current_date = current_date[:19]
+current_date = current_date.replace("-","").replace(":","").replace(" ","")
+'''
+
+#change directory to where the HCFA files are
+os.chdir("***")
+
+#pull all the files in the directory, declare them as a pd.Series, and delimit them on "-"
+#filenames = os.listdir()
+filenames = glob.glob('*-*.pdf')
+filenames = pd.Series(filenames)
+filenames_split = filenames.str.split(pat="-")
+
+
+def data_insertion(insertion_values):
+
+    try:
+    
+        print('Executing 2, data_insertion()')
+        #connect to *** Database and execute the query
+        #variable instantiation
+        server = ***
+        database = ***
+        username = ***
+        password = ***
+        
+        #2a: Open pyodbc connection and execute query
+        step = '2a'
+        conn = pyodbc.connect('DRIVER={ODBC Driver 17 for SQL Server};SERVER='+server+';DATABASE='+database+';UID='+username+';PWD='+ password)
+        cursor = conn.cursor()
+        cursor.fast_executemany = True
+    
+        #2b: build the SQL statement. 'insertion_values' has an extra comma at the end, hence the [:-1] splicing
+        step = '2b'
+        SQL = "INSERT INTO *** (group_no,company_id,claim_type,claimno,old_filename,new_filename,date_renamed) VALUES "
+        SQL = SQL + insertion_values[:-1]
+        #print(SQL)
+        
+        #2c: execute the SQL
+        step = '2c'
+        cursor.execute(SQL)
+        cursor.commit()
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        print("Error on step {}: ".format(step) + str(e))        
+    
+
+#rename the files and build out the insertion values for the SQL statement
+def renamefiles_and_buildquery():
+
+    try:
+
+        print('Executing 1, renamefiles_and_buildquery()')
+        #variable instantiation
+        insertion_values = ""
+        group_id_check = ""
+    
+        #iterate through each file in 'filenames_split
+        for i in range(len(filenames_split)):
+            #1a-1g: pull the parsed values from filenames_split
+            step = '1a'
+            group_id = filenames_split[i][0]
+            
+            step = '1b'
+            company_id = filenames_split[i][1]
+            
+            step = '1c'
+            claim_type = filenames_split[i][2]
+            
+            step = '1d'
+            claimno = filenames_split[i][3].replace(".pdf","")
+            
+            #1e: reset the counter when the group_id changes
+            step = '1e'
+            if group_id != group_id_check:
+                counter = 1
+                group_id_check = group_id
+            
+            #1f-1g: declare the old and new filenames
+            step = '1f'
+            old_filename = filenames[i]
+            
+            step = '1g'
+            new_filename = "***" + current_date + "_" + group_id + "_" + str(counter) + ".pdf"
+            
+            #1h: increment the counter by 1, after it has been used in the new_filename declaration
+            step = '1h'
+            counter += 1
+            
+            #1i: build the SQL statement for each file
+            step = '1i'
+            insertion_values = insertion_values + "('" + group_id + "','" + company_id + "','" + claim_type + "','" + claimno + "','" + old_filename + "','" + new_filename + "', GETDATE()),"
+
+            #1j: rename each file iteratively
+            step = '1j'
+            os.rename(old_filename, new_filename)
+            
+            #1k: insert into the tracking table for every 25th file and at the last file. To prevent string truncation into SQL
+            step = '1k'
+            if i % 25 == 0 or i == (len(filenames_split)-1):
+                print(str(i+1) + " record counter insertion")                
+                data_insertion(insertion_values)
+                insertion_values = ""
+        
+    except Exception as e:
+        print("Error on step {}: ".format(step) + str(e))
+        
+
+   
+#execute the definition
+renamefiles_and_buildquery()
